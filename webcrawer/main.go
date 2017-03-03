@@ -61,9 +61,22 @@ func main() {
 		//log.Debug("url=%s",url)
 		go fetch(url, cont)
 	}
-	for range inputString {
-		input := <-cont
-		fmt.Printf("%s \n", input)
+
+	outputFile, outputError := os.Create("output.dat")
+
+	if outputError != nil {
+		fmt.Printf("An error occurred on opening the outputfile\n")
+		return // exit the function on error
+	}
+	defer outputFile.Close()
+
+	output := bufio.NewWriter(outputFile)
+	
+	for _,req := range inputString {
+		str := <-cont
+		output.WriteString(req)
+		output.WriteString(str)
+		fmt.Printf("%s \n", str)
 	}
 	//fmt.Printf("%s", robots)
 	fmt.Println("Shutting Down")
