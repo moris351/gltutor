@@ -11,7 +11,9 @@ import (
 	_ "strconv"
 	"strings"
 	_ "time"
+	"gltutor/webcrawer/fetcher"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/ian-kent/go-log/log"
 )
 
@@ -32,6 +34,8 @@ func main() {
 	inputReader := bufio.NewReader(inputFile)
 	i := 0
 	var inputString []string
+	//var aq []chan string
+
 	//var readerError error
 
 	for {
@@ -39,28 +43,22 @@ func main() {
 		if readerError == io.EOF {
 			break
 		}
-		inputString = append(inputString, str)
-		fmt.Printf("The input was:%d %s", i, inputString[i])
+		inputString = append(inputString, strings.Trim(str, "\015\012"))
+		//aq = append(aq, make(chan string))
+		fmt.Printf("The input was:%d %s\n", i, inputString[i])
 		i++
 	}
-	/*var inputString [3]string
-	inputString[0]="http://www.google.com/robots.txt"
-	inputString[1]="http://www.google.com/robots.txt"
-	inputString[2]="http://www.google.com/robots.txt"
-	*/
-	// Pass a function which returns a log message and arguments
-	//log.Debug(func() { []interface{}{"Example log message: %s", "example arg"} })
-	//log.Debug(func(i ...interface{}) { []interface{}{"Example log message: %s", "example arg"} })
-	//var cont chan string
 	cont := make(chan string)
-	for _, url := range inputString {
+	/*for i, url := range inputString {
 		if len(url) == 0 {
 			break
 		}
 
 		//log.Debug("url=%s",url)
-		go fetch(url, cont)
-	}
+		//go fetch(url, cont,aq[i])
+	}*/
+	f := fetcher.New()
+	f.Start(inputString)
 
 	outputFile, outputError := os.Create("output.dat")
 
@@ -71,17 +69,18 @@ func main() {
 	defer outputFile.Close()
 
 	output := bufio.NewWriter(outputFile)
-	
-	for _,req := range inputString {
+
+	for _, req := range inputString {
 		str := <-cont
 		output.WriteString(req)
 		output.WriteString(str)
 		fmt.Printf("%s \n", str)
+
 	}
 	//fmt.Printf("%s", robots)
 	fmt.Println("Shutting Down")
 }
-func fetch(url string, cont chan string) (err error) {
+func fetch(url string, cont chan string, aqi chan string ) (err error) {
 
 	fmt.Printf("url=%s\n", url)
 	//url = "http://www.google.com/robots.txt"
@@ -93,6 +92,16 @@ func fetch(url string, cont chan string) (err error) {
 
 	defer resp.Body.Close()
 	log.Debug("Readall!")
+	doc, err := goquery.NewDocumentFromResponse(resp)
+	if err != nil {
+		//fmt.Printf("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
+		return
+	}
+	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
+		val, _ := s.Attr("href")
+		aqi <- val 
+
+	})
 
 	c, err := ioutil.ReadAll(resp.Body)
 	//str := string(c[:2])
