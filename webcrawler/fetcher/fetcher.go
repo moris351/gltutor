@@ -23,15 +23,19 @@ type Command struct {
 }
 
 type PageInfo struct{
+	u url.URL
 	title string
-	header string
+	description string
 }
 
 //fetcher struct
 type Fetcher struct {
 	urls map[string]chan Command
-	info map[string]chan PageInfo
+	back chan PageInfo
 	dup map[string]bool
+
+	deep map[string]int
+	deepLimit int
 	//chUrl []chan url.URL
 	delay time.Duration
 }
@@ -40,18 +44,20 @@ func New() *Fetcher {
 	return &Fetcher{
 		delay: 5 * time.Second,
 		urls:  make(map[string]chan Command),
-		info: make(map[string]chan PageInfo),
+		back: make(chan PageInfo),
+		deep: make(map[string]int),
+		deepLimit: 3,
 	}
 }
-
+/*
 func (f *Fetcher) getUrls(host string) chan Command {
-	_, err := f.urls[host]
+	ch, err := f.urls[host]
 	if err == false {
 		f.urls[host] = make(chan Command, 10)
 	}
 	return f.urls[host]
 }
-
+*/
 //pop url from chan
 //call handle
 //loop for next
@@ -63,7 +69,36 @@ func (f *Fetcher) doRequest() {
 	}
 }
 
+func (f *Fetcher) parseBack(back chan PageInfo){
+	log.Debug("parseBack")
+	for {
+		info,ok:=<-back
+		if(!ok){log.Debug("info read not ok")}
+		log.Debug("u=%s", info.u.String())
+		ss:= info.u.String()
+		if i:=strings.Index(ss,"#"); i !=-1{
+			ss = ss[0:i]
+		}
+		log.Debug("ss=%s", ss)
+		
+		if _,ok:=f.dup[ss];!ok{
+			if _,ok:=f.urls[info.u.Host];!ok {
+				log.Debug("new host=%s",info.u.Host)
+				f.urls[info.u.Host] = make(chan Command,3)
+				go f.parseChan(f.urls[info.u.Host])
+			}
+			f.urls[info.u.Host] <- Command{info.u, ""}
+		}else
+		{
+			log.Debug("url dup, url=%s",info.u.String())
+			f.dup[ss]=true
+		}
+
+	}
+}
+
 func (f *Fetcher) parseChan(cmd chan Command) {
+	log.Debug("parseChan")
 	for {
 		select {
 		case v := <-cmd:
@@ -94,12 +129,20 @@ func (f *Fetcher) handle(cmd Command) error {
 		return err
 	}
 
-	val :=doc.Find("html title").Text()
-	log.Debug("title=%s",val)
+	title :=doc.Find("html title").Text()
+	log.Debug("title=%s",title)
 
-	val,_ =doc.Find("head meta[name='description']").Attr("content")
-	log.Debug("description=%s",val)
+	description,_ :=doc.Find("head meta[name='description']").Attr("content")
+	log.Debug("description=%s",description)
+	/*for host,deep:=range f.deep{
+		log.Debug("crew deep =%d, host=%s",deep,host)
 
+	}
+	
+	if(f.deep[cmd.u.Host]>=f.deepLimit){
+		log.Debug("crew deep reached, host=%s",cmd.u.Host)
+		return nil
+	}*/
 	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
 		val, _ := s.Attr("href")
 		log.Debug("doc.find: val=%s", val)
@@ -108,21 +151,13 @@ func (f *Fetcher) handle(cmd Command) error {
 			log.Debug("parse failed")
 			return
 		}
-		log.Debug("u=%s", u.String())
-		ss:= u.String()
-		if i:=strings.Index(ss,"#"); i !=-1{
-			ss = ss[0:i]
-		}
-		log.Debug("ss=%s", ss)
-		
-		if !f.dup[ss]{
-			f.getUrls(u.Host) <- Command{*u, ""}
-		}else
-		{
-			f.dup[ss]=true
-		}
+		f.back<-PageInfo{*u,title,description}
 
 	})
+
+	//log.Debug("now deep=%d, host=%s",f.deep[cmd.u.Host],cmd.u.Host)
+
+	//f.deep[cmd.u.Host]+=1
 	return err
 }
 
@@ -139,11 +174,17 @@ func (f *Fetcher) Start(rawUrls []string) {
 			break
 		}
 
-		ch := f.getUrls(u.Host)
+		_,ok := f.urls[u.Host]
+		if !ok {
+			f.urls[u.Host] = make(chan Command,3)
+		}
+		
+		go f.parseChan(f.urls[u.Host])
 
-		ch <- Command{*u, ""}
+		f.urls[u.Host] <- Command{*u, ""}
 	}
-
-	f.doRequest()
+	f.back = make(chan PageInfo,3)
+	f.parseBack(f.back)
+	//f.doRequest()
 
 }
