@@ -6,17 +6,22 @@ import (
 	"gltutor/webcrawler/fetcher"
 	"io"
 	"os"
-	_ "runtime"
+	"runtime"
 	_ "strconv"
 	"strings"
-	_ "time"
-
+	"time"
+	"sync"
+	"bytes"
+	"flag"
 	"github.com/ian-kent/go-log/layout"
 	"github.com/ian-kent/go-log/appenders"
 	"github.com/ian-kent/go-log/log"
 )
-
+var(
+	memStats    = flag.Duration("memstats", 0, "display memory statistics at a given interval")
+)
 func main() {
+	flag.Parse()
 	// Pass a log message and arguments directly
 	logger := log.Logger()
 	//appender:=logger.Appender()
@@ -53,15 +58,26 @@ func main() {
 	//cont := make(chan string)
 
 	f := fetcher.New()
+
+	// First mem stat print must be right after creating the fetchbot
+
+	log.Debug("*memStats=%v",*memStats)
+	if *memStats > 0 {
+		// Print starting stats
+		log.Debug("*memStats=%v",*memStats)
+		printMemStats(nil)
+		// Run at regular intervals
+		runMemStats(f, *memStats)
+		// On exit, print ending stats after a GC
+		defer func() {
+			runtime.GC()
+			printMemStats(nil)
+		}()
+	}
+	
 	f.Start(inputString)
 
-	outputFile, outputError := os.Create("output.dat")
 
-	if outputError != nil {
-		fmt.Printf("An error occurred on opening the outputfile\n")
-		return // exit the function on error
-	}
-	defer outputFile.Close()
 
 	//output := bufio.NewWriter(outputFile)
 /*
@@ -75,4 +91,45 @@ func main() {
 */
 	//fmt.Printf("%s", robots)
 	fmt.Println("Shutting Down")
+}
+
+
+func runMemStats(f *fetcher.Fetcher, tick time.Duration) {
+	var mu sync.Mutex
+	var di *fetcher.DebugInfo
+
+	// Start goroutine to collect fetchbot debug info
+	go func() {
+		for v := range f.Debug() {
+			mu.Lock()
+			di = v
+			mu.Unlock()
+		}
+	}()
+	// Start ticker goroutine to print mem stats at regular intervals
+	go func() {
+		c := time.Tick(tick)
+		for _ = range c {
+			mu.Lock()
+			printMemStats(di)
+			mu.Unlock()
+		}
+	}()
+}
+
+func printMemStats(di *fetcher.DebugInfo) {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(strings.Repeat("=", 72) + "\n")
+	buf.WriteString("Memory Profile:\n")
+	buf.WriteString(fmt.Sprintf("\tAlloc: %d Kb\n", mem.Alloc/1024))
+	buf.WriteString(fmt.Sprintf("\tTotalAlloc: %d Kb\n", mem.TotalAlloc/1024))
+	buf.WriteString(fmt.Sprintf("\tNumGC: %d\n", mem.NumGC))
+	buf.WriteString(fmt.Sprintf("\tGoroutines: %d\n", runtime.NumGoroutine()))
+	if di != nil {
+		buf.WriteString(fmt.Sprintf("\tNumHosts: %d\n", di.NumHosts))
+	}
+	buf.WriteString(strings.Repeat("=", 72))
+	log.Debug(buf.String())
 }

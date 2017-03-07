@@ -1,18 +1,18 @@
 package fetcher
 
 import (
-	_ "bufio"
+	"bufio"
 	_ "fmt"
 	_ "io"
 	_ "io/ioutil"
 	"net/http"
 	"net/url"
-	_ "os"
+	"os"
 	_ "runtime"
 	_ "strconv"
 	"strings"
 	"time"
-
+	"sync"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/ian-kent/go-log/log"
 )
@@ -27,6 +27,10 @@ type PageInfo struct{
 	title string
 	description string
 }
+// The DebugInfo holds information to introspect the Fetcher's state.
+type DebugInfo struct {
+	NumHosts int
+}
 
 //fetcher struct
 type Fetcher struct {
@@ -38,6 +42,11 @@ type Fetcher struct {
 	deepLimit int
 	//chUrl []chan url.URL
 	delay time.Duration
+
+	// dbg is a channel used to push debug information.
+	dbgmu     sync.Mutex
+	dbg       chan *DebugInfo
+	debugging bool
 }
 
 func New() *Fetcher {
@@ -45,7 +54,9 @@ func New() *Fetcher {
 		delay: 5 * time.Second,
 		urls:  make(map[string]chan Command),
 		back: make(chan PageInfo),
+		dup: make(map[string]bool),
 		deep: make(map[string]int),
+		dbg: make(chan *DebugInfo),
 		deepLimit: 3,
 	}
 }
@@ -69,6 +80,14 @@ func (f *Fetcher) doRequest() {
 	}
 }
 
+// Debug returns the channel to use to receive the debugging information. It is not intended
+// to be used by package users.
+func (f *Fetcher) Debug() <-chan *DebugInfo {
+	f.dbgmu.Lock()
+	defer f.dbgmu.Unlock()
+	f.debugging = true
+	return f.dbg
+}
 func (f *Fetcher) parseBack(back chan PageInfo){
 	log.Debug("parseBack")
 	for {
@@ -80,8 +99,11 @@ func (f *Fetcher) parseBack(back chan PageInfo){
 			ss = ss[0:i]
 		}
 		log.Debug("ss=%s", ss)
-		
+		if f.dup == nil{
+			log.Debug("f.dup is nil")
+		}
 		if _,ok:=f.dup[ss];!ok{
+			f.dup[ss]=true
 			if _,ok:=f.urls[info.u.Host];!ok {
 				log.Debug("new host=%s",info.u.Host)
 				f.urls[info.u.Host] = make(chan Command,3)
@@ -91,8 +113,10 @@ func (f *Fetcher) parseBack(back chan PageInfo){
 		}else
 		{
 			log.Debug("url dup, url=%s",info.u.String())
-			f.dup[ss]=true
+			//f.dup[ss]=true
 		}
+
+		f.output(info)
 
 	}
 }
@@ -105,6 +129,19 @@ func (f *Fetcher) parseChan(cmd chan Command) {
 			log.Debug("Received on cmd: %s\n", v.u.String())
 			go f.handle(v)
 		}
+		
+		f.dbgmu.Lock()
+		log.Debug("debugging=%t",f.debugging)
+		if f.debugging {
+			//f.mu.Lock()
+			select {
+			case f.dbg <- &DebugInfo{len(f.urls)}:
+			default:
+			}
+			//f.mu.Unlock()
+		}
+		f.dbgmu.Unlock()
+		
 		time.Sleep(f.delay)
 	}
 }
@@ -117,7 +154,7 @@ func (f *Fetcher) handle(cmd Command) error {
 	log.Debug("handle: ru=%s", cmd.u.String())
 	resp, err := http.Get(cmd.u.String())
 	if err != nil {
-		log.Fatal("error message: %s", err)
+		log.Debug("error message: %s", err)
 		return err
 	}
 
@@ -184,7 +221,31 @@ func (f *Fetcher) Start(rawUrls []string) {
 		f.urls[u.Host] <- Command{*u, ""}
 	}
 	f.back = make(chan PageInfo,3)
-	f.parseBack(f.back)
 	//f.doRequest()
+	f.parseBack(f.back)
+}
+func (f *Fetcher) output(info PageInfo){
+    outputFile, outputError := os.OpenFile("output.dat", os.O_APPEND|os.O_CREATE, 0666)
+    if outputError != nil {
+        log.Debug("An error occurred with file opening or creation\n")
+        return  
+    }
+    defer outputFile.Close()
+
+    outputWriter := bufio.NewWriter(outputFile)
+    //outputString := "hello world!\n"
+	outputWriter.WriteString(info.u.String()+"\n"+info.title+"\n"+info.description+"\n")
+
+    outputWriter.Flush()
+
 
 }
+/*
+func detectContentCharset(r reader) string {
+    if data, err := r.Peek(1024); err == nil {
+        if _, name, ok := charset.DetermineEncoding(data, ""); ok {
+            return name
+        }
+    }
+    return "utf8"
+}*/
