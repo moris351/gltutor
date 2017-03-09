@@ -16,6 +16,10 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/ian-kent/go-log/log"
 )
+const (
+	DefaultWorkerIdleTTL = 30 * time.Second
+	DefaultWorkerDelay = 5 * time.Second
+)
 
 type Command struct {
 	u url.URL
@@ -34,6 +38,7 @@ type DebugInfo struct {
 
 //fetcher struct
 type Fetcher struct {
+	mu    sync.Mutex
 	urls map[string]chan Command
 	back chan PageInfo
 	dup map[string]bool
@@ -42,7 +47,8 @@ type Fetcher struct {
 	deepLimit int
 	//chUrl []chan url.URL
 	delay time.Duration
-
+	
+	WorkerIdleTTL time.Duration
 	// dbg is a channel used to push debug information.
 	dbgmu     sync.Mutex
 	dbg       chan *DebugInfo
@@ -51,32 +57,14 @@ type Fetcher struct {
 
 func New() *Fetcher {
 	return &Fetcher{
-		delay: 5 * time.Second,
+		delay: DefaultWorkerDelay,
 		urls:  make(map[string]chan Command),
 		back: make(chan PageInfo),
 		dup: make(map[string]bool),
 		deep: make(map[string]int),
 		dbg: make(chan *DebugInfo),
+		WorkerIdleTTL: DefaultWorkerIdleTTL,
 		deepLimit: 3,
-	}
-}
-/*
-func (f *Fetcher) getUrls(host string) chan Command {
-	ch, err := f.urls[host]
-	if err == false {
-		f.urls[host] = make(chan Command, 10)
-	}
-	return f.urls[host]
-}
-*/
-//pop url from chan
-//call handle
-//loop for next
-func (f *Fetcher) doRequest() {
-	log.Debug("doRequest")
-	for _, cmd := range f.urls {
-		go f.parseChan(cmd)
-		//f.handle(cmd)
 	}
 }
 
@@ -106,8 +94,10 @@ func (f *Fetcher) parseBack(back chan PageInfo){
 			f.dup[ss]=true
 			if _,ok:=f.urls[info.u.Host];!ok {
 				log.Debug("new host=%s",info.u.Host)
+				f.mu.Lock()
 				f.urls[info.u.Host] = make(chan Command,3)
-				go f.parseChan(f.urls[info.u.Host])
+				f.mu.Unlock()
+				go f.parseChan(f.urls[info.u.Host],info.u.Host)
 			}
 			f.urls[info.u.Host] <- Command{info.u, ""}
 		}else
@@ -121,13 +111,45 @@ func (f *Fetcher) parseBack(back chan PageInfo){
 	}
 }
 
-func (f *Fetcher) parseChan(cmd chan Command) {
+func (f *Fetcher) parseChan(cmd chan Command, hostkey string) {
 	log.Debug("parseChan")
-	for {
+	
+	var ttl   <-chan time.Time
+	//var delay <-chan time.Time
+	delay := time.NewTicker(5*time.Second)
+	defer delay.Stop()
+	var cmdQ []*Command
+
+	endloop := false
+	for !endloop {
 		select {
 		case v := <-cmd:
 			log.Debug("Received on cmd: %s\n", v.u.String())
-			go f.handle(v)
+			cmdQ = append(cmdQ,&v)
+			ttl = time.After(f.WorkerIdleTTL)
+
+		// Send queued values
+		case <-delay.C:
+			log.Debug("ready for new search, current queue length: %d\n", len(cmdQ))
+			if len(cmdQ) == 0 {break}
+			if len(cmdQ) >= 1{
+				v := cmdQ[0]
+				cmdQ[0] = nil
+				cmdQ = cmdQ[1:]
+				f.handle(*v)
+			}
+
+		case <-ttl:
+			// Worker has been idle for WorkerIdleTTL, terminate it
+			f.mu.Lock()
+			inch, ok := f.urls[hostkey]
+			delete(f.urls, hostkey)
+			f.mu.Unlock()
+			if ok {
+				close(inch)
+			}
+			endloop = true
+			break
 		}
 		
 		f.dbgmu.Lock()
@@ -142,7 +164,7 @@ func (f *Fetcher) parseChan(cmd chan Command) {
 		}
 		f.dbgmu.Unlock()
 		
-		time.Sleep(f.delay)
+		//time.Sleep(f.delay)
 	}
 }
 
@@ -152,7 +174,11 @@ func (f *Fetcher) parseChan(cmd chan Command) {
 //add a anchor to chan
 func (f *Fetcher) handle(cmd Command) error {
 	log.Debug("handle: ru=%s", cmd.u.String())
-	resp, err := http.Get(cmd.u.String())
+	client := http.Client{
+		Timeout: time.Duration(15 * time.Second),
+	}
+	resp, err := client.Get(cmd.u.String())
+	//resp, err := http.Get(cmd.u.String())
 	if err != nil {
 		log.Debug("error message: %s", err)
 		return err
@@ -216,7 +242,7 @@ func (f *Fetcher) Start(rawUrls []string) {
 			f.urls[u.Host] = make(chan Command,3)
 		}
 		
-		go f.parseChan(f.urls[u.Host])
+		go f.parseChan(f.urls[u.Host],u.Host)
 
 		f.urls[u.Host] <- Command{*u, ""}
 	}
