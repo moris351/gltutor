@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"flag"
 	"fmt"
 	"gltutor/webcrawler/fetcher"
 	"io"
@@ -9,17 +11,20 @@ import (
 	"runtime"
 	_ "strconv"
 	"strings"
-	"time"
 	"sync"
-	"bytes"
-	"flag"
-	"github.com/ian-kent/go-log/layout"
+	"time"
+
 	"github.com/ian-kent/go-log/appenders"
+	"github.com/ian-kent/go-log/layout"
 	"github.com/ian-kent/go-log/log"
 )
-var(
-	memStats    = flag.Duration("memstats", 0, "display memory statistics at a given interval")
+
+var (
+	memStats = flag.Duration("memstats", 0, "display memory statistics at a given interval")
 )
+
+//go:generate gotemplate "github.com/ncw/gotemplate/set" mySet(string)
+
 func main() {
 	flag.Parse()
 	// Pass a log message and arguments directly
@@ -28,10 +33,9 @@ func main() {
 
 	logger.SetAppender(appenders.RollingFile("webcrawler.log", true))
 	//logger.SetAppender(appenders.Console())
-	appender:=logger.Appender()
+	appender := logger.Appender()
 	//alayout := appender.Layout()
 	appender.SetLayout(layout.Pattern("%d-%p-%m"))
-
 
 	inputFile, inputError := os.Open("input.dat")
 
@@ -52,7 +56,7 @@ func main() {
 		inputString = append(inputString, strings.Trim(str, "\015\012"))
 		//aq = append(aq, make(chan string))
 	}
-	for _,str:=range inputString{
+	for _, str := range inputString {
 		log.Debug("The input was: %s\n", str)
 	}
 	//cont := make(chan string)
@@ -61,10 +65,10 @@ func main() {
 
 	// First mem stat print must be right after creating the fetchbot
 
-	log.Debug("*memStats=%v",*memStats)
+	log.Debug("*memStats=%v", *memStats)
 	if *memStats > 0 {
 		// Print starting stats
-		log.Debug("*memStats=%v",*memStats)
+		log.Debug("*memStats=%v", *memStats)
 		printMemStats(nil)
 		// Run at regular intervals
 		runMemStats(f, *memStats)
@@ -74,25 +78,22 @@ func main() {
 			printMemStats(nil)
 		}()
 	}
-	
+
 	f.Start(inputString)
 
-
-
 	//output := bufio.NewWriter(outputFile)
-/*
-	for _, req := range inputString {
-		str := <-cont
-		output.WriteString(req)
-		output.WriteString(str)
-		fmt.Printf("%s \n", str)
+	/*
+		for _, req := range inputString {
+			str := <-cont
+			output.WriteString(req)
+			output.WriteString(str)
+			fmt.Printf("%s \n", str)
 
-	}
-*/
+		}
+	*/
 	//fmt.Printf("%s", robots)
 	fmt.Println("Shutting Down")
 }
-
 
 func runMemStats(f *fetcher.Fetcher, tick time.Duration) {
 	var mu sync.Mutex
