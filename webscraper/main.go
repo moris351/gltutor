@@ -7,9 +7,7 @@ import(
 	_ "time"
 )
 func main() {
-	client := http.Client{}/*
-		Timeout: time.Duration(15 * time.Second),
-	}*/
+	client := http.Client{}
 	resp, err := client.Get("http://www.github.com")
 	defer resp.Body.Close()
 
